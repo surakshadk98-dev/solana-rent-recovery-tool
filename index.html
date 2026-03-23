@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Solana Rent Recovery Tool</title>
+
+  <style>
+    body {
+      background: #0b0f1a;
+      color: #ffffff;
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    h2 {
+      margin-bottom: 10px;
+    }
+
+    button {
+      padding: 10px 15px;
+      margin: 5px;
+      border: none;
+      border-radius: 8px;
+      background: #4f46e5;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      background: #555;
+      cursor: not-allowed;
+    }
+
+    .log {
+      background: #111;
+      padding: 10px;
+      border-radius: 8px;
+      margin-top: 15px;
+      font-size: 12px;
+      max-height: 250px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h2>Solana Rent Recovery Tool 🚀</h2>
+  <p>
+    Scan your wallet for empty SPL token accounts and reclaim locked SOL.
+  </p>
+
+  <button id="connectBtn">Connect Wallet</button>
+  <button id="scanBtn" disabled>Scan Accounts</button>
+  <button id="closeBtn" disabled>Recover SOL</button>
+
+  <div class="log" id="log"></div>
+
+<script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+
+  <script>
+    (function () {
+
+      /* ---------- STATE ---------- */
+      let provider = null;
+      let wallet = null;
+      let closableAccounts = [];
+
+      /* ---------- LOGGER ---------- */
+      function log(message) {
+        const logEl = document.getElementById("log");
+        const entry = document.createElement("div");
+        entry.textContent = message;
+        logEl.prepend(entry);
+      }
+
+      /* ---------- GET WALLET PROVIDER ---------- */
+      function getProvider() {
+        return window.solana;
+      }
+
+      /* ---------- CONNECT WALLET ---------- */
+      async function connectWallet() {
+        provider = getProvider();
+
+        if (!provider) {
+          alert("Phantom wallet not found. Please install it.");
+          return;
+        }
+
+        try {
+          await provider.connect();
+          wallet = provider.publicKey;
+
+          log("Connected: " + wallet.toString());
+          document.getElementById("scanBtn").disabled = false;
+
+        } catch (err) {
+          log("Connection failed");
+        }
+      }
+
+      /* ---------- SCAN EMPTY ACCOUNTS ---------- */
+      async function scanAccounts() {
+        const connection = new solanaWeb3.Connection(
+          "https://api.mainnet-beta.solana.com"
+        );
+
+        log("Scanning for empty SPL accounts...");
+
+        const response = await connection.getParsedTokenAccountsByOwner(
+          wallet,
+          {
+            programId: new solanaWeb3.PublicKey(
+              "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+            ),
+          }
+        );
+
+        closableAccounts = [];
+        let totalLamports = 0;
+
+        for (let acc of response.value) {
+          const amount =
+            acc.account.data.parsed.info.tokenAmount.amount;
+
+          if (amount === "0") {
+            closableAccounts.push(acc.pubkey);
+
+            const info = await connection.getAccountInfo(acc.pubkey);
+            totalLamports += info.lamports;
+          }
+        }
+
+        log("Empty accounts found: " + closableAccounts.length);
+        log("Estimated recoverable SOL: " + (totalLamports / 1e9));
+
+        if (closableAccounts.length > 0) {
+          document.getElementById("closeBtn").disabled = false;
+        }
+      }
+
+      /* ---------- CLOSE ACCOUNTS ---------- */
+      async function closeAccounts() {
+        const connection = new solanaWeb3.Connection(
+          "https://api.mainnet-beta.solana.com"
+        );
+
+        const transaction = new solanaWeb3.Transaction();
+
+        log("Preparing transaction...");
+
+        for (let acc of closableAccounts) {
+          transaction.add(
+            new solanaWeb3.TransactionInstruction({
+              programId: new solanaWeb3.PublicKey(
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+              ),
+              keys: [
+                { pubkey: acc, isSigner: false, isWritable: true },
+                { pubkey: wallet, isSigner: false, isWritable: true },
+                { pubkey: wallet, isSigner: true, isWritable: false },
+              ],
+              data: Uint8Array.from([9]), // Close account instruction
+            })
+          );
+        }
+
+        transaction.feePayer = wallet;
+
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+
+        try {
+          const signedTx = await provider.signTransaction(transaction);
+          const signature = await connection.sendRawTransaction(
+            signedTx.serialize()
+          );
+
+          log("Transaction sent: " + signature);
+
+        } catch (err) {
+          log("Transaction failed");
+        }
+      }
+
+      /* ---------- EVENTS ---------- */
+      document.getElementById("connectBtn").onclick = connectWallet;
+      document.getElementById("scanBtn").onclick = scanAccounts;
+      document.getElementById("closeBtn").onclick = closeAccounts;
+
+    })();
+  </script>
+
+</body>
+</html>
